@@ -55,8 +55,6 @@ class ClientHandler:
         self.client_id = client_id
         self.running = True
         self.player_name = None
-        self.board = None
-        self.game_started = False
     
     def encode_message(self, msg_type, data):
         # Convert data to bytes
@@ -149,19 +147,23 @@ class ClientHandler:
         if msg_type == 1:  # JOIN
             self.player_name = data
             self.send_message(10, f"Welcome {self.player_name}! You are connected to the Math Game Server.")
-            # TODO: NATHAN need timer + notification of how many players are connected
+            # Notify all clients about new player
+            player_count = len([c for c in self.server.clients if c.player_name])
+            self.send_message(10, f"{player_count} player(s) connected. Waiting for game to start...", broadcast=True)
             
         elif msg_type == 2:  # START
             if not self.player_name:
                 self.send_message(13, "Error: Please JOIN first before starting the game.")
                 return
             
-            self.board = generate_board()
-            self.game_started = True
-            self.send_message(12, str(self.board), broadcast=True)
+            if not self.server.game_started: # start game
+                self.server.start_game()
+                self.send_message(12, str(self.server.board), broadcast=True)
+            else: # should not happen normally cuz game already started by a client => client shouldn't be sending START again
+                self.send_message(12, str(self.server.board))
             
         elif msg_type == 3:  # CLICK
-            if not self.game_started:
+            if not self.server.game_started:
                 self.send_message(13, "Error: Game not started. Send START message first.")
                 return
             
@@ -169,18 +171,20 @@ class ClientHandler:
             row = int(parts[0])
             col = int(parts[1])
             
-            clicked_value = self.board[row][col]
-            
-            if clicked_value.startswith('o[') or clicked_value.startswith('x['):
-                return
-            num_value = int(clicked_value)
-            if is_prime(num_value):
-                # update board with player marker
-                self.board[row][col] = f"o[{self.client_id}]"
-                self.send_message(12, str(self.board), broadcast=True) # TODO: NATHAN need SCORE update here
-            else:
-                self.board[row][col] = f"x[{self.client_id}]"
-                self.send_message(12, str(self.board), broadcast=True)
+            with self.server.board_lock: # thread lock to prevent race conditions
+                clicked_value = self.server.board[row][col]
+                
+                if clicked_value.startswith('o[') or clicked_value.startswith('x['):
+                    return
+                
+                num_value = int(clicked_value)
+                if is_prime(num_value):
+                    # update board with player marker
+                    self.server.board[row][col] = f"o[{self.client_id}]"
+                    self.send_message(12, str(self.server.board), broadcast=True) # TODO: NATHAN need SCORE update here
+                else:
+                    self.server.board[row][col] = f"x[{self.client_id}]"
+                    self.send_message(12, str(self.server.board), broadcast=True)
                 
         else:
             self.send_message(13, f"Unknown message type: {msg_type}")
@@ -198,6 +202,15 @@ class MathGameServer:
         self.server_socket = None
         self.clients = []
         self.running = False
+        # Shared game state
+        self.board = None
+        self.game_started = False
+        self.board_lock = threading.Lock()  # THREAD SAFE board access
+    
+    def start_game(self):
+        self.board = generate_board()
+        self.game_started = True
+        print("Game started ====> Board generated.")
     
     def broadcast_message(self, msg_type, data):
         for client in self.clients:
