@@ -1,7 +1,21 @@
+# Author: Nathan Gawargy
+# Math Genius Game Server
+
 import socket
 import threading
 import random
 import struct
+
+# TOKENS (message TYPES)
+# Client -> Server
+JOIN = 1
+START = 2
+CLICK = 3
+# Server -> Client
+WELCOME = 10
+START_GAME = 11
+CLICK_UPDATE = 12
+GAME_OVER = 13
 
 def is_prime(n):
     if n < 2:
@@ -84,7 +98,7 @@ class ClientHandler:
         try:
             if broadcast:
                 # Broadcast to all clients
-                self.server.broadcast_message(msg_type, data, exclude=self)
+                self.server.broadcast_message(msg_type, data)
             else:
                 # Send only to this client
                 packet = self.encode_message(msg_type, data)
@@ -135,36 +149,37 @@ class ClientHandler:
     def handle_message(self, msg_type, data):
         # Message types:
         # Client to Server:
-        #   1 = JOIN (data: player_name)
-        #   2 = START (data: empty or game settings)
-        #   3 = CLICK (data: row,col position)
+        #   JOIN = 1 (data: player_name)
+        #   START = 2 (data: empty or game settings)
+        #   CLICK = 3 (data: row,col position)
         # Server to Client:
-        #   10 = WELCOME (data: player info)
-        #   11 = START_GAME (data: board)
-        #   12 = CLICK_UPDATE (data: click result/board state)
-        #   13 = GAME_OVER (data: game result)
+        #   WELCOME = 10 (data: player info)
+        #   START_GAME = 11 (data: board)
+        #   CLICK_UPDATE = 12 (data: click result/board state)
+        #   GAME_OVER = 13 (data: game result)
         
-        if msg_type == 1:  # JOIN
+        if msg_type == JOIN:
             self.player_name = data
-            self.send_message(10, f"Welcome {self.player_name}! You are connected to the Math Game Server.")
+            self.send_message(WELCOME, f"Welcome {self.player_name}! You are connected to the Math Game Server.")
             # Notify all clients about new player
             player_count = len([c for c in self.server.clients if c.player_name])
-            self.send_message(10, f"{player_count} player(s) connected. Waiting for game to start...", broadcast=True)
+            self.send_message(WELCOME, f"{player_count} player(s) connected. Waiting for game to start...", broadcast=True)
             
-        elif msg_type == 2:  # START
+        elif msg_type == START:
             if not self.player_name:
-                self.send_message(13, "Error: Please JOIN first before starting the game.")
+                self.send_message(GAME_OVER, "Error: Please JOIN first before starting the game.")
                 return
             
             if not self.server.game_started: # start game
                 self.server.start_game()
-                self.send_message(12, str(self.server.board), broadcast=True)
-            else: # should not happen normally cuz game already started by a client => client shouldn't be sending START again
-                self.send_message(12, str(self.server.board))
+                # Send START_GAME to all clients with initial board
+                self.send_message(START_GAME, str(self.server.board), broadcast=True)
+            else: # game already started, send current board state as CLICK_UPDATE
+                self.send_message(CLICK_UPDATE, str(self.server.board))
             
-        elif msg_type == 3:  # CLICK
+        elif msg_type == CLICK:
             if not self.server.game_started:
-                self.send_message(13, "Error: Game not started. Send START message first.")
+                self.send_message(GAME_OVER, "Error: Game not started. Send START message first.")
                 return
             
             parts = data.split(',')
@@ -181,13 +196,13 @@ class ClientHandler:
                 if is_prime(num_value):
                     # update board with player marker
                     self.server.board[row][col] = f"o[{self.client_id}]"
-                    self.send_message(12, str(self.server.board), broadcast=True) # TODO: NATHAN need SCORE update here
+                    self.send_message(CLICK_UPDATE, str(self.server.board), broadcast=True) # TODO: NATHAN need SCORE update here
                 else:
                     self.server.board[row][col] = f"x[{self.client_id}]"
-                    self.send_message(12, str(self.server.board), broadcast=True)
+                    self.send_message(CLICK_UPDATE, str(self.server.board), broadcast=True)
                 
         else:
-            self.send_message(13, f"Unknown message type: {msg_type}")
+            self.send_message(GAME_OVER, f"Unknown message type: {msg_type}")
     
     def cleanup(self):
         self.running = False
