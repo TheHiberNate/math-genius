@@ -14,6 +14,7 @@ START = 2
 CLICK = 3
 NAME_UPDATE = 4
 PLAY_AGAIN = 5
+CLIENT_LEFT = 6
 # Server -> Client
 WELCOME = 10
 START_GAME = 11
@@ -22,6 +23,7 @@ GAME_OVER = 13
 TIMER_START = 14
 SCORE_UPDATE = 15
 SERVER_BUSY = 16
+PLAYER_LEFT_UPDATE_OTHERS = 17
 
 
 class MathGameClient:
@@ -31,6 +33,7 @@ class MathGameClient:
         self.player_name = None
         self.board = None
         self.connected = False
+        self.current_overlay = None  # track current overlay to destroy when needed
         
         # GUI with Tkinter
         self.root = tk.Tk()
@@ -278,6 +281,9 @@ class MathGameClient:
             self.log_message(f"Server Busy: {data}")
             messagebox.showerror("Connection Rejected", data)
             self.on_disconnect()
+        elif msg_type == PLAYER_LEFT_UPDATE_OTHERS:
+            self.log_message(f"Player Left: {data}")
+            self.show_player_left_overlay(data)
         elif msg_type == GAME_OVER:
             self.timer_running = False # update timer flag
             self.log_message(f"Game Over: {data}")
@@ -327,8 +333,13 @@ class MathGameClient:
     
     # Create a frame overlay on top of the board to show results of the game
     def show_game_over_overlay(self, winner_info, scores):
+        # destroy any existing overlay first
+        if self.current_overlay:
+            self.current_overlay.destroy()
+        
         overlay = tk.Frame(self.board_frame, bg="white", relief=tk.RAISED, borderwidth=5)
         overlay.place(relx=0.5, rely=0.5, anchor=tk.CENTER, width=450, height=350)
+        self.current_overlay = overlay  # Store reference
         
         title_label = tk.Label(overlay, text="GAME OVER", font=("Arial", 20, "bold"), bg="white", fg="darkblue")
         title_label.pack(pady=15)
@@ -356,19 +367,54 @@ class MathGameClient:
         
         # Exit button == disconnect and return to home
         exit_btn = tk.Button(button_frame, text="Exit", 
-                            command=lambda: [overlay.destroy(), self.exit_to_home()],
+                            command=lambda: [overlay.destroy(), setattr(self, 'current_overlay', None), self.exit_to_home()],
                             font=("Arial", 12), bg="red", fg="white", width=12)
         exit_btn.pack(side=tk.LEFT, padx=5)
         
         # Play Again == queue for new game with the same ppl
         play_again_btn = tk.Button(button_frame, text="Play Again", 
-                                   command=lambda: [overlay.destroy(), self.request_play_again()],
+                                   command=lambda: [overlay.destroy(), setattr(self, 'current_overlay', None), self.request_play_again()],
                                    font=("Arial", 12), bg="green", fg="white", width=12)
         play_again_btn.pack(side=tk.LEFT, padx=5)
+    
+    # Show new display if a player doesn't want to play again (only option is to QUIT/EXIT)
+    def show_player_left_overlay(self, message):
+        # Destroy any existing overlay (like game over) to prevent interaction
+        if self.current_overlay:
+            self.current_overlay.destroy()
+        
+        overlay = tk.Frame(self.board_frame, bg="lightyellow", relief=tk.RAISED, borderwidth=5)
+        overlay.place(relx=0.5, rely=0.5, anchor=tk.CENTER, width=400, height=200)
+        self.current_overlay = overlay  # Store reference
+        
+        title_label = tk.Label(overlay, text="Player Left - Game Ended", font=("Arial", 18, "bold"), 
+                               bg="lightyellow", fg="darkred")
+        title_label.pack(pady=20)
+        
+        message_label = tk.Label(overlay, text=message, font=("Arial", 12), 
+                            bg="lightyellow", fg="black", wraplength=350)
+        message_label.pack(pady=10)
+
+        info_label = tk.Label(overlay, text="The game cannot continue (because a player left). Please exit.", 
+            font=("Arial", 10, "italic"), bg="lightyellow", fg="darkred")
+        info_label.pack(pady=5)
+        
+        # EXIT button
+        exit_btn = tk.Button(overlay, text="Exit to Home", 
+                            command=lambda: [overlay.destroy(), setattr(self, 'current_overlay', None), self.exit_to_home()],
+                            font=("Arial", 12), bg="red", fg="white", width=15)
+        exit_btn.pack(pady=15)
     
     # Function to exit to home screen (disconnect from server)
     def exit_to_home(self):
         self.log_message("Exiting to home screen...")
+        # notify server that this client is leaving
+        if self.socket and self.connected:
+            try:
+                packet = self.encode_message(CLIENT_LEFT, "")
+                self.socket.send(packet)
+            except:
+                pass
         if self.socket:
             try:
                 self.socket.close()

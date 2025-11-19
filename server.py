@@ -13,6 +13,7 @@ START = 2
 CLICK = 3
 NAME_UPDATE = 4
 PLAY_AGAIN = 5
+CLIENT_LEFT = 6
 # Server -> Client
 WELCOME = 10
 START_GAME = 11
@@ -21,6 +22,7 @@ GAME_OVER = 13
 TIMER_START = 14
 SCORE_UPDATE = 15
 SERVER_BUSY = 16
+PLAYER_LEFT_UPDATE_OTHERS = 17
 
 def is_prime(n):
     if n < 2:
@@ -184,6 +186,10 @@ class ClientHandler:
         elif msg_type == PLAY_AGAIN:
             # client wants to play again => use same clients
             self.server.player_ready_for_new_game(self.client_id)
+        
+        elif msg_type == CLIENT_LEFT:
+            # client chose to exit instead of play again
+            self.server.player_left_after_game(self.client_id, self.player_name)
             
         elif msg_type == START:
             if not self.player_name:
@@ -345,6 +351,21 @@ class MathGameServer:
                     score_data = self.format_scores()
                     client.send_message(SCORE_UPDATE, score_data, broadcast=True)
                     break
+    
+    # Notify other players when someone leaves instead of playing again
+    def player_left_after_game(self, client_id, player_name):
+        # remove from ready players if they were in there
+        if hasattr(self, 'ready_players') and client_id in self.ready_players:
+            self.ready_players.discard(client_id)
+        
+        # clear all ready players since we can't continue without all original players
+        if hasattr(self, 'ready_players'):
+            self.ready_players.clear()
+        
+        # notify all other clients
+        message = f"{player_name} has left the game and will not play again."
+        self.broadcast_message(PLAYER_LEFT_UPDATE_OTHERS, message)
+        print(f"Player {player_name} (ID: {client_id}) left after game ended.")
     
     # Called to end the game and notify all clients
     # Happens when timer expires or board is complete or player found all primes
