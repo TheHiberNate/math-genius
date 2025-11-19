@@ -280,7 +280,24 @@ class MathGameClient:
         elif msg_type == GAME_OVER:
             self.timer_running = False # update timer flag
             self.log_message(f"Game Over: {data}")
-            messagebox.showinfo("Game Over", data)
+            
+            # Parse game over message to display formatted results on board
+            try:
+                import ast
+                # check if message contains scores = this means game ended normally
+                if "Final scores:" in data:
+                    parts = data.split("Final scores:")
+                    winner_info = parts[0].strip()
+                    scores_str = parts[1].strip()
+                    scores = ast.literal_eval(scores_str)
+        
+                    # Display game over overlay on board
+                    self.show_game_over_overlay(winner_info, scores)
+                else:
+                    messagebox.showinfo("Game Over", data)
+            except:
+                # Fallback to simple display if parsing fails
+                messagebox.showinfo("Game Over", data)
     
     # Function to update the GUI board based on updates from server
     def update_board(self, board_str):
@@ -306,6 +323,36 @@ class MathGameClient:
                         btn.config(text=value, bg="lightgray", fg="black")    
         except Exception as e:
             self.log_message(f"Error updating board: {e}")
+    
+    # Create a frame overlay on top of the board to show results of the game
+    def show_game_over_overlay(self, winner_info, scores):
+        overlay = tk.Frame(self.board_frame, bg="white", relief=tk.RAISED, borderwidth=5)
+        overlay.place(relx=0.5, rely=0.5, anchor=tk.CENTER, width=450, height=350)
+        
+        title_label = tk.Label(overlay, text="GAME OVER", font=("Arial", 20, "bold"), bg="white", fg="darkblue")
+        title_label.pack(pady=15)
+        
+        # Winner info and Standings
+        winner_label = tk.Label(overlay, text=winner_info, font=("Arial", 14, "bold"),bg="white", fg="darkgreen", wraplength=400)
+        winner_label.pack(pady=10)
+        separator = tk.Frame(overlay, height=2, bg="darkblue")
+        separator.pack(fill=tk.X, padx=20, pady=10)
+        standings_label = tk.Label(overlay, text="Final Standings", font=("Arial", 16, "bold"), bg="white", fg="darkblue")
+        standings_label.pack(pady=5)        
+        scores_frame = tk.Frame(overlay, bg="white")
+        scores_frame.pack(pady=10)
+        
+        # display each player's score
+        for i, (name, score) in enumerate(sorted(scores.items(), key=lambda x: x[1], reverse=True)):
+            medal = "FIRST" if i == 0 else "SECOND" if i == 1 else "THIRD" if i == 2 else "  "
+            score_label = tk.Label(scores_frame, text=f"{medal} {name}: {score} points", 
+                                   font=("Arial", 12), bg="white", fg="black")
+            score_label.pack(anchor=tk.W, padx=20, pady=3)
+        
+        # Close button
+        close_btn = tk.Button(overlay, text="Close", command=overlay.destroy, 
+                             font=("Arial", 12), bg="red", fg="white", width=15)
+        close_btn.pack(pady=15)
             
     def on_disconnect(self):
         self.connected = False
