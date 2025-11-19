@@ -12,6 +12,7 @@ JOIN = 1
 START = 2
 CLICK = 3
 NAME_UPDATE = 4
+PLAY_AGAIN = 5
 # Server -> Client
 WELCOME = 10
 START_GAME = 11
@@ -179,6 +180,10 @@ class ClientHandler:
             # Update player name
             self.player_name = data
             self.server.player_names[self.client_id] = data
+        
+        elif msg_type == PLAY_AGAIN:
+            # client wants to play again => use same clients
+            self.server.player_ready_for_new_game(self.client_id)
             
         elif msg_type == START:
             if not self.player_name:
@@ -310,6 +315,36 @@ class MathGameServer:
             name = self.player_names.get(client_id, f"Player {client_id}")
             formatted[name] = score
         return str(formatted)
+    
+    # Function after ending a game to check which players want to play again
+    # Only if ALL those connected players want to play again, the game restarts
+    def player_ready_for_new_game(self, client_id):
+        if not hasattr(self, 'ready_players'):
+            self.ready_players = set()
+        
+        self.ready_players.add(client_id)
+        ready_count = len(self.ready_players)
+        total_players = len([c for c in self.clients if c.player_name])
+        
+        print(f"Player {client_id} ready for new game. {ready_count}/{total_players} ready.")
+        
+        # notify all clients about ready status
+        ready_names = [self.player_names.get(pid, f"Player {pid}") for pid in self.ready_players]
+        status_msg = f"{ready_count}/{total_players} players ready: {', '.join(ready_names)}"
+        self.broadcast_message(WELCOME, status_msg)
+        
+        # start when all players are ready
+        if ready_count == total_players and total_players > 0:
+            self.ready_players.clear()
+            self.start_game()
+            # Start new game => send TIMER_START, START_GAME, SCORE_UPDATE
+            for client in self.clients:
+                if client.player_name:
+                    client.send_message(TIMER_START, str(self.game_duration), broadcast=True)
+                    client.send_message(START_GAME, str(self.board), broadcast=True)
+                    score_data = self.format_scores()
+                    client.send_message(SCORE_UPDATE, score_data, broadcast=True)
+                    break
     
     # Called to end the game and notify all clients
     # Happens when timer expires or board is complete or player found all primes

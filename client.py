@@ -13,6 +13,7 @@ JOIN = 1
 START = 2
 CLICK = 3
 NAME_UPDATE = 4
+PLAY_AGAIN = 5
 # Server -> Client
 WELCOME = 10
 START_GAME = 11
@@ -349,11 +350,46 @@ class MathGameClient:
                                    font=("Arial", 12), bg="white", fg="black")
             score_label.pack(anchor=tk.W, padx=20, pady=3)
         
-        # Close button
-        close_btn = tk.Button(overlay, text="Close", command=overlay.destroy, 
-                             font=("Arial", 12), bg="red", fg="white", width=15)
-        close_btn.pack(pady=15)
-            
+        # btns for Exit and Play Again
+        button_frame = tk.Frame(overlay, bg="white")
+        button_frame.pack(pady=15)
+        
+        # Exit button == disconnect and return to home
+        exit_btn = tk.Button(button_frame, text="Exit", 
+                            command=lambda: [overlay.destroy(), self.exit_to_home()],
+                            font=("Arial", 12), bg="red", fg="white", width=12)
+        exit_btn.pack(side=tk.LEFT, padx=5)
+        
+        # Play Again == queue for new game with the same ppl
+        play_again_btn = tk.Button(button_frame, text="Play Again", 
+                                   command=lambda: [overlay.destroy(), self.request_play_again()],
+                                   font=("Arial", 12), bg="green", fg="white", width=12)
+        play_again_btn.pack(side=tk.LEFT, padx=5)
+    
+    # Function to exit to home screen (disconnect from server)
+    def exit_to_home(self):
+        self.log_message("Exiting to home screen...")
+        if self.socket:
+            try:
+                self.socket.close()
+            except:
+                pass
+        self.on_disconnect()
+    
+    # Function to request play again
+    def request_play_again(self):
+        if not self.connected:
+            messagebox.showwarning("Warning", "Not connected to server")
+            return
+        
+        try:
+            packet = self.encode_message(PLAY_AGAIN, "")
+            self.socket.send(packet)
+            self.log_message("Ready for new game. Waiting for other players...")
+            self.status_label.config(text="Waiting for other players...", fg="orange")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to request play again: {e}")
+    
     def on_disconnect(self):
         self.connected = False
         self.running = False
