@@ -12,11 +12,14 @@ from tkinter import messagebox, simpledialog
 JOIN = 1
 START = 2
 CLICK = 3
+NAME_UPDATE = 4
 # Server -> Client
 WELCOME = 10
 START_GAME = 11
 CLICK_UPDATE = 12
 GAME_OVER = 13
+TIMER_START = 14
+SCORE_UPDATE = 15
 
 
 class MathGameClient:
@@ -36,6 +39,18 @@ class MathGameClient:
         # status label for connection status
         self.status_label = tk.Label(self.root, text="Not connected", font=("Arial", 12), pady=10)
         self.status_label.pack()
+        
+        # timer and Score
+        self.info_frame = tk.Frame(self.root)
+        self.info_frame.pack(pady=5)
+        self.timer_label = tk.Label(self.info_frame, text="Time: --:--", font=("Arial", 14, "bold"), fg="blue")
+        self.timer_label.pack(side=tk.LEFT, padx=20)
+        self.score_label = tk.Label(self.info_frame, text="Scores: ", font=("Arial", 12))
+        self.score_label.pack(side=tk.LEFT, padx=20)
+        
+        # timer state
+        self.timer_running = False
+        self.time_remaining = 0
         
         # buttons on the TKINTER window
         self.control_frame = tk.Frame(self.root)
@@ -75,7 +90,37 @@ class MathGameClient:
     def log_message(self, message):
         self.log_text.insert(tk.END, message + "\n")
         self.log_text.see(tk.END)
-        
+    
+    # Function to start countdown timer
+    def start_timer(self, duration):
+        self.time_remaining = duration
+        self.timer_running = True
+        self.update_timer_display()
+
+    # Function to update timer display (client-side only)
+    def update_timer_display(self):
+        if self.timer_running and self.time_remaining > 0:
+            minutes = self.time_remaining // 60
+            seconds = self.time_remaining % 60
+            self.timer_label.config(text=f"Time: {minutes:02d}:{seconds:02d}")
+            self.time_remaining -= 1
+            self.root.after(1000, self.update_timer_display)
+        elif self.timer_running and self.time_remaining <= 0:
+            self.timer_label.config(text="Time: 00:00", fg="red")
+            self.timer_running = False
+    
+    # Function to update score display based on server msg
+    def update_scores(self, scores_str):
+        try:
+            import ast
+            scores = ast.literal_eval(scores_str)
+            # scores output as "NameClient1: 5, NameClient2: 3"
+            score_text = ", ".join([f"{name}: {score}" for name, score in sorted(scores.items())])
+            self.score_label.config(text=f"Scores: {score_text}")
+        except Exception as e:
+            self.log_message(f"Error updating scores: {e}")
+    
+    # Function to encode messages into bytes to send to server
     def encode_message(self, msg_type, data):
         if isinstance(data, str):
             data_bytes = data.encode('utf-8')
@@ -89,6 +134,7 @@ class MathGameClient:
         packet = type_byte + length_bytes + data_bytes
         return packet
     
+    # Function to decode messages from bytes received from server
     def decode_message(self, packet):
         msg_type = struct.unpack('B', packet[0:1])[0]
         length = struct.unpack('!I', packet[1:5])[0]
@@ -146,6 +192,7 @@ class MathGameClient:
         except Exception as e:
             messagebox.showerror("Error", f"Failed to send START: {e}")
             
+    # Function to handle cell click (sends message to server)
     def on_cell_click(self, row, col):
         if not self.connected:
             return
@@ -192,17 +239,18 @@ class MathGameClient:
             self.log_message(f"Connection error: {e}")
             self.root.after(0, self.on_disconnect)
             
+    # Function to handle messages from server
     def handle_server_message(self, msg_type, data):
-        """Handle messages from server."""
         # Message types from server:
         #   WELCOME = 10
         #   START_GAME = 11 (initial board state)
         #   CLICK_UPDATE = 12 (board state)
         #   GAME_OVER = 13
+        #   SCORE_UPDATE = 14
+        #   TIMER_START = 15
         
         if msg_type == WELCOME:
             self.log_message(f"Server: {data}")
-            
             # connected ONLY after WELCOME msg received
             if not self.connected:
                 self.connected = True
@@ -210,14 +258,21 @@ class MathGameClient:
                 self.status_label.config(text=f"Connected as {self.player_name}", fg="green")
                 self.connect_btn.config(state=tk.DISABLED)
                 self.start_btn.config(state=tk.NORMAL)
+        elif msg_type == TIMER_START: # start timer for specified duration
+            duration = int(data)
+            self.log_message(f"Game timer started: {duration} seconds")
+            self.start_timer(duration)
         elif msg_type == START_GAME:
-            self.log_message(f"Game started. Board received.")
+            self.log_message(f"Game started + Board received")
             self.update_board(data)
             self.start_btn.config(state=tk.DISABLED) # hide start btn cuz game started already
         elif msg_type == CLICK_UPDATE:
             self.log_message(f"Board updated")
             self.update_board(data)
+        elif msg_type == SCORE_UPDATE:
+            self.update_scores(data)
         elif msg_type == GAME_OVER:
+            self.timer_running = False # update timer flag
             self.log_message(f"Game Over: {data}")
             messagebox.showinfo("Game Over", data)
     

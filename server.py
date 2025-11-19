@@ -11,11 +11,14 @@ import struct
 JOIN = 1
 START = 2
 CLICK = 3
+NAME_UPDATE = 4
 # Server -> Client
 WELCOME = 10
 START_GAME = 11
 CLICK_UPDATE = 12
 GAME_OVER = 13
+TIMER_START = 14
+SCORE_UPDATE = 15
 
 def is_prime(n):
     if n < 2:
@@ -70,6 +73,7 @@ class ClientHandler:
         self.running = True
         self.player_name = None
     
+    # Function to encode messages into bytes to send to client
     def encode_message(self, msg_type, data):
         # Convert data to bytes
         if isinstance(data, str):
@@ -87,6 +91,7 @@ class ClientHandler:
         packet = type_byte + length_bytes + data_bytes # DATA
         return packet
     
+    # Function to decode messages from bytes received from client (separate into TYPE, DATA)
     def decode_message(self, packet):
         msg_type = struct.unpack('B', packet[0:1])[0] # TYPE
         length = struct.unpack('!I', packet[1:5])[0] # LENGTH
@@ -94,6 +99,7 @@ class ClientHandler:
         data = data_bytes.decode('utf-8')
         return msg_type, data
     
+    # Function to send message to client (broadcast = True => send to all clients)
     def send_message(self, msg_type, data, broadcast=False):
         try:
             if broadcast:
@@ -146,6 +152,7 @@ class ClientHandler:
         finally:
             self.cleanup()
     
+    # Function to handle messages from client (knows how to decode different TOKENS/TYPES)
     def handle_message(self, msg_type, data):
         # Message types:
         # Client to Server:
@@ -160,10 +167,17 @@ class ClientHandler:
         
         if msg_type == JOIN:
             self.player_name = data
+            # Store player name in server's player_names dict
+            self.server.player_names[self.client_id] = data
             self.send_message(WELCOME, f"Welcome {self.player_name}! You are connected to the Math Game Server.")
             # Notify all clients about new player
             player_count = len([c for c in self.server.clients if c.player_name])
             self.send_message(WELCOME, f"{player_count} player(s) connected. Waiting for game to start...", broadcast=True)
+            
+        elif msg_type == NAME_UPDATE:
+            # Update player name
+            self.player_name = data
+            self.server.player_names[self.client_id] = data
             
         elif msg_type == START:
             if not self.player_name:
@@ -172,11 +186,15 @@ class ClientHandler:
             
             if not self.server.game_started: # start game
                 self.server.start_game()
+                # Send TIMER_START to all clients
+                self.send_message(TIMER_START, str(self.server.game_duration), broadcast=True)
                 # Send START_GAME to all clients with initial board
                 self.send_message(START_GAME, str(self.server.board), broadcast=True)
+                # Send initial scores
+                score_data = self.server.format_scores()
+                self.send_message(SCORE_UPDATE, score_data, broadcast=True)
             else: # game already started, send current board state as CLICK_UPDATE
                 self.send_message(CLICK_UPDATE, str(self.server.board))
-            
         elif msg_type == CLICK:
             if not self.server.game_started:
                 self.send_message(GAME_OVER, "Error: Game not started. Send START message first.")
@@ -190,16 +208,27 @@ class ClientHandler:
                 clicked_value = self.server.board[row][col]
                 
                 if clicked_value.startswith('o[') or clicked_value.startswith('x['):
-                    return
+                    return # if already clicked = ignore
                 
+                # TODO: NATHAN can put this in its own function
+                ##############################
                 num_value = int(clicked_value)
                 if is_prime(num_value):
-                    # update board with player marker
-                    self.server.board[row][col] = f"o[{self.client_id}]"
-                    self.send_message(CLICK_UPDATE, str(self.server.board), broadcast=True) # TODO: NATHAN need SCORE update here
+                    self.server.board[row][col] = f"o[{self.client_id}]" # add player marker (O means correct)
+                    self.server.scores[self.client_id] = self.server.scores.get(self.client_id, 0) + 1 # add +1 to that client's score
                 else:
-                    self.server.board[row][col] = f"x[{self.client_id}]"
-                    self.send_message(CLICK_UPDATE, str(self.server.board), broadcast=True)
+                    self.server.board[row][col] = f"x[{self.client_id}]" # add player marker (X means wrong)
+                    self.server.scores[self.client_id] = self.server.scores.get(self.client_id, 0) - 1 # subtract 1 from that client's score
+                #############################
+
+                # broadcast updated board + scores
+                self.send_message(CLICK_UPDATE, str(self.server.board), broadcast=True)
+                score_data = self.server.format_scores()
+                self.send_message(SCORE_UPDATE, score_data, broadcast=True)
+                
+                # Check if board is complete
+                if self.server.check_board_complete():
+                    self.server.end_game("BOARD_COMPLETE")
                 
         else:
             self.send_message(GAME_OVER, f"Unknown message type: {msg_type}")
@@ -221,11 +250,24 @@ class MathGameServer:
         self.board = None
         self.game_started = False
         self.board_lock = threading.Lock()  # THREAD SAFE board access
+        # Timer and scoring
+        self.game_timer = None
+        self.game_duration = 120  # 2 minutes in seconds
+        self.scores = {}  # client_id -> score
+        self.player_names = {}  # client_id -> player_name
     
     def start_game(self):
         self.board = generate_board()
         self.game_started = True
-        print("Game started ====> Board generated.")
+        # Initialize scores for all connected clients
+        for client in self.clients:
+            if client.player_name:
+                self.scores[client.client_id] = 0
+        # Start game timer
+        self.game_timer = threading.Timer(self.game_duration, self.end_game_timer)
+        self.game_timer.daemon = True
+        self.game_timer.start()
+        print(f"Game started ====> Board generated. Timer: {self.game_duration}s")
     
     def broadcast_message(self, msg_type, data):
         for client in self.clients:
@@ -237,8 +279,69 @@ class MathGameServer:
                 except Exception as e:
                     print(f"Error broadcasting to {client.address}: {e}")
     
+    def check_board_complete(self):
+        """Check if all prime numbers have been found."""
+        if not self.board:
+            return False
+        
+        for i in range(5):
+            for j in range(5):
+                value = self.board[i][j]
+                # If it's not marked (doesn't start with 'o[' or 'x['), check if it's a prime
+                if not value.startswith('o[') and not value.startswith('x['):
+                    try:
+                        num_value = int(value)
+                        if is_prime(num_value):
+                            # Found an unmarked prime, game not complete
+                            return False
+                    except ValueError:
+                        pass
+        return True
+    
+    # Called when the game timer expires
+    def end_game_timer(self):
+        print("Game timer expired!")
+        self.end_game("TIME_UP")
+    
+    # Used to format scores with player names instead of their IDs
+    def format_scores(self):
+        formatted = {}
+        for client_id, score in self.scores.items():
+            name = self.player_names.get(client_id, f"Player {client_id}")
+            formatted[name] = score
+        return str(formatted)
+    
+    # Called to end the game and notify all clients
+    # Happens when timer expires or board is complete
+    def end_game(self, reason):
+        if not self.game_started:
+            return
+        
+        self.game_started = False
+        
+        if self.game_timer and self.game_timer.is_alive(): # stop timer (if still running)
+            self.game_timer.cancel()
+        
+        # determine winner
+        if self.scores:
+            winner_id = max(self.scores.items(), key=lambda x: x[1])[0]
+            winner_name = self.player_names.get(winner_id, f"Player {winner_id}")
+            winner_score = self.scores[winner_id]
+            
+            formatted_scores = self.format_scores()
+            if reason == "TIME_UP":
+                message = f"Time's up! Winner: {winner_name} with {winner_score} points. Final scores: {formatted_scores}"
+            else:  # BOARD_COMPLETE
+                message = f"All primes found! Winner: {winner_name} with {winner_score} points. Final scores: {formatted_scores}"
+        else:
+            message = f"Game ended: {reason}"
+        
+        # broadcast GAME_OVER
+        self.broadcast_message(GAME_OVER, message)
+        print(f"Game ended: {message}")
+    
+    # START SERVER FUNCTION
     def start(self):
-        """Start the server."""
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM) # TCP socket
         self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) # allow to bind the port again after program exit
         self.server_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1) # dont wait for packets to fill buffer, send right away
@@ -248,9 +351,7 @@ class MathGameServer:
             self.server_socket.listen(4)
             self.running = True
             print(f"Server started on {self.host}:{self.port}")
-            
             self.accept_connections()
-            
         except Exception as e:
             print(f"Error starting server: {e}")
         finally:
@@ -280,16 +381,12 @@ class MathGameServer:
     
     def stop(self):
         self.running = False
-        
         # close all client connections
         for client in self.clients:
             client.cleanup()
-        
         if self.server_socket:
             self.server_socket.close()
-        
         print("Server stopped")
-
 
 if __name__ == "__main__":
     server = MathGameServer(host='localhost', port=5555)
