@@ -20,6 +20,7 @@ CLICK_UPDATE = 12
 GAME_OVER = 13
 TIMER_START = 14
 SCORE_UPDATE = 15
+SERVER_BUSY = 16
 
 
 class MathGameClient:
@@ -246,8 +247,9 @@ class MathGameClient:
         #   START_GAME = 11 (initial board state)
         #   CLICK_UPDATE = 12 (board state)
         #   GAME_OVER = 13
-        #   SCORE_UPDATE = 14
-        #   TIMER_START = 15
+        #   TIMER_START = 14
+        #   SCORE_UPDATE = 15
+        #   SERVER_BUSY = 16
         
         if msg_type == WELCOME:
             self.log_message(f"Server: {data}")
@@ -271,6 +273,10 @@ class MathGameClient:
             self.update_board(data)
         elif msg_type == SCORE_UPDATE:
             self.update_scores(data)
+        elif msg_type == SERVER_BUSY:
+            self.log_message(f"Server Busy: {data}")
+            messagebox.showerror("Connection Rejected", data)
+            self.on_disconnect()
         elif msg_type == GAME_OVER:
             self.timer_running = False # update timer flag
             self.log_message(f"Game Over: {data}")

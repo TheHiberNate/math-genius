@@ -19,6 +19,7 @@ CLICK_UPDATE = 12
 GAME_OVER = 13
 TIMER_START = 14
 SCORE_UPDATE = 15
+SERVER_BUSY = 16
 
 def is_prime(n):
     if n < 2:
@@ -280,7 +281,6 @@ class MathGameServer:
                     print(f"Error broadcasting to {client.address}: {e}")
     
     def check_board_complete(self):
-        """Check if all prime numbers have been found."""
         if not self.board:
             return False
         
@@ -312,7 +312,8 @@ class MathGameServer:
         return str(formatted)
     
     # Called to end the game and notify all clients
-    # Happens when timer expires or board is complete
+    # Happens when timer expires or board is complete or player found all primes
+    # (could also end if server gets message which is not supported)
     def end_game(self, reason):
         if not self.game_started:
             return
@@ -362,6 +363,22 @@ class MathGameServer:
             try:
                 client_socket, address = self.server_socket.accept()
                 print(f"New connection from {address}")
+
+                # check if game is already in progress
+                if self.game_started:
+                    reject_msg = "Connection rejected: Game is currently in progress. Please wait for the next game."
+                    try:
+                        # send rejection message (SERVER_BUSY)
+                        data_bytes = reject_msg.encode('utf-8')
+                        type_byte = struct.pack('B', SERVER_BUSY)
+                        length_bytes = struct.pack('!I', len(data_bytes))
+                        packet = type_byte + length_bytes + data_bytes
+                        client_socket.send(packet)
+                    except:
+                        pass
+                    client_socket.close()
+                    print(f"Rejected connection from {address}: Game in progress")
+                    continue
 
                 # create a client handler + associated unique ID
                 client_id = len(self.clients) + 1
