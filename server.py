@@ -1,10 +1,11 @@
-# Author: Nathan Gawargy
-# Math Genius Game Server
+# Author: Nathan Gawargy (patched)
+# Math Genius Game Server (fixed: remove disconnected clients properly)
 
 import socket
 import threading
 import random
 import struct
+import time
 
 # TOKENS (message TYPES)
 # Client -> Server
@@ -36,25 +37,17 @@ def is_prime(n):
             return False
     return True
 
-# Generate the board with 10 to 15 primes from 2-2000 and odd numbers everywhere else.
-# Board is a 5x5 grid
 def generate_board():
     board = [['' for _ in range(5)] for _ in range(5)]
-    primes = [i for i in range(2, 2000) if is_prime(i)] # prime numbers from 2 to 2000
-    odd_numbers = [i for i in range(1, 2001, 2)]        # odd numbers from 1 to 2000
+    primes = [i for i in range(2, 2000) if is_prime(i)]
+    odd_numbers = [i for i in range(1, 2001, 2)]
     num_primes = random.randint(10, 15)
-    
-    positions = []
-    for i in range(5):
-        for j in range(5):
-            positions.append((i, j))
-    
+
+    positions = [(i, j) for i in range(5) for j in range(5)]
     random.shuffle(positions)
-    selected_positions = positions[:num_primes]
-    
-    # put the numbers in random positions on the board
-    for pos in selected_positions:
-        i, j = pos
+    selected = positions[:num_primes]
+
+    for (i, j) in selected:
         board[i][j] = str(random.choice(primes))
     for i in range(5):
         for j in range(5):
@@ -62,13 +55,7 @@ def generate_board():
                 board[i][j] = str(random.choice(odd_numbers))
     return board
 
-# Client Handler to manage each connected client
-# Used to also handle message encoding/decoding to send to/from client
-# TYPE-LENGTH-DATA Message format:
-#   Type (1 byte): integer indicating message type
-#   Length (4 bytes): integer indicating length of data
-#   Data (max 2^32 bytes): actual data 
-class ClientHandler:    
+class ClientHandler:
     def __init__(self, client_socket, address, server, client_id):
         self.client_socket = client_socket
         self.address = address
@@ -76,336 +63,400 @@ class ClientHandler:
         self.client_id = client_id
         self.running = True
         self.player_name = None
-    
-    # Function to encode messages into bytes to send to client
+        self.lock = threading.Lock()  # to avoid concurrent send/cleanup on same client
+
     def encode_message(self, msg_type, data):
-        # Convert data to bytes
         if isinstance(data, str):
             data_bytes = data.encode('utf-8')
         else:
             data_bytes = str(data).encode('utf-8')
-        
-        # TYPE 1 byte
         type_byte = struct.pack('B', msg_type)
-        
-        # LENGTH 4 bytes
-        length = len(data_bytes)
-        length_bytes = struct.pack('!I', length)
-                
-        packet = type_byte + length_bytes + data_bytes # DATA
-        return packet
-    
-    # Function to decode messages from bytes received from client (separate into TYPE, DATA)
+        length_bytes = struct.pack('!I', len(data_bytes))
+        return type_byte + length_bytes + data_bytes
+
     def decode_message(self, packet):
-        msg_type = struct.unpack('B', packet[0:1])[0] # TYPE
-        length = struct.unpack('!I', packet[1:5])[0] # LENGTH
-        data_bytes = packet[5:5+length] # DATA
+        msg_type = struct.unpack('B', packet[0:1])[0]
+        length = struct.unpack('!I', packet[1:5])[0]
+        data_bytes = packet[5:5+length]
         data = data_bytes.decode('utf-8')
         return msg_type, data
-    
-    # Function to send message to client (broadcast = True => send to all clients)
+
     def send_message(self, msg_type, data, broadcast=False):
         try:
             if broadcast:
-                # Broadcast to all clients
                 self.server.broadcast_message(msg_type, data)
-            else:
-                # Send only to this client
-                packet = self.encode_message(msg_type, data)
+                return
+            packet = self.encode_message(msg_type, data)
+            with self.lock:
                 self.client_socket.send(packet)
-                print(f"Sent to {self.address}: Type={msg_type}, Data={data[:100] if len(str(data)) > 100 else data}") # TODO: NATHAN remove this
+            # optional debug:
+            print(f"Sent to {self.address}: Type={msg_type}, Data={str(data)[:100]}")
         except Exception as e:
             print(f"Error sending message to {self.address}: {e}")
+            # mark not running and trigger server-side cleanup
             self.running = False
-    
+            # cleanup will be handled by broadcast logic or by listen finally
+
     def listen(self):
         try:
             while self.running:
-                header = self.client_socket.recv(5) 
-                
+                header = self.client_socket.recv(5)
                 if not header or len(header) < 5:
-                    print(f"Client {self.address} disconnected")
+                    print(f"Client {self.address} disconnected (no header)")
                     break
-                
-                # use length to know how much data to receive
                 length = struct.unpack('!I', header[1:5])[0]
-                
-                # receive actual data
                 data_bytes = b''
                 while len(data_bytes) < length:
                     remaining = length - len(data_bytes)
-                    chunk = self.client_socket.recv(remaining) # receive remaining bytes
+                    chunk = self.client_socket.recv(remaining)
                     if not chunk:
                         raise ConnectionError(f"Connection closed. Expected {length} bytes, got {len(data_bytes)}")
                     data_bytes += chunk
-                
-                if len(data_bytes) != length: # verify we got exactly the right amount
+                if len(data_bytes) != length:
                     raise ValueError(f"Data length mismatch: expected {length}, got {len(data_bytes)}")
-                
-                # reconstruct full packet + decode
                 packet = header + data_bytes
                 msg_type, data = self.decode_message(packet)
-                
-                print(f"Received from {self.address}: Type={msg_type}, Data={data}") # TODO: NATHAN remove this
-                
-                # process the message
+                print(f"Received from {self.address}: Type={msg_type}, Data={data}")
                 self.handle_message(msg_type, data)
-                
         except Exception as e:
             print(f"Error listening to {self.address}: {e}")
         finally:
-            self.cleanup()
-    
-    # Function to handle messages from client (knows how to decode different TOKENS/TYPES)
+            # ensure cleanup is always invoked
+            try:
+                self.cleanup()
+            except Exception as e:
+                print(f"Error during cleanup of {self.address}: {e}")
+
     def handle_message(self, msg_type, data):
-        # Message types:
-        # Client to Server:
-        #   JOIN = 1 (data: player_name)
-        #   START = 2 (data: empty or game settings)
-        #   CLICK = 3 (data: row,col position)
-        # Server to Client:
-        #   WELCOME = 10 (data: player info)
-        #   START_GAME = 11 (data: board)
-        #   CLICK_UPDATE = 12 (data: click result/board state)
-        #   GAME_OVER = 13 (data: game result)
-        
         if msg_type == JOIN:
+            # prevent duplicate names (only among current active players)
+            active_names = set(self.server.player_names.get(c.client_id) for c in self.server.clients if c is not self and getattr(c, 'running', False) and c.player_name)
+            if data in (n for n in active_names if n):
+                self.send_message(SERVER_BUSY, "Name already in use. Choose another.")
+                # close and cleanup
+                self.running = False
+                try:
+                    with self.lock:
+                        self.client_socket.close()
+                except:
+                    pass
+                return
+
             self.player_name = data
-            # Store player name in server's player_names dict
             self.server.player_names[self.client_id] = data
             self.send_message(WELCOME, f"Welcome {self.player_name}! You are connected to the Math Game Server.")
-            # Notify all clients about new player
-            player_count = len([c for c in self.server.clients if c.player_name])
-            self.send_message(WELCOME, f"{player_count} player(s) connected. Waiting for game to start...", broadcast=True)
-            
+            # notify all clients of player count
+            player_count = len([c for c in self.server.clients if getattr(c, 'running', False) and c.player_name])
+            self.server.broadcast_message(WELCOME, f"{player_count} player(s) connected. Waiting for game to start...")
+        
         elif msg_type == NAME_UPDATE:
-            # Update player name
             self.player_name = data
             self.server.player_names[self.client_id] = data
-        
+
         elif msg_type == PLAY_AGAIN:
-            # client wants to play again => use same clients
             self.server.player_ready_for_new_game(self.client_id)
-        
+
         elif msg_type == CLIENT_LEFT:
-            # client chose to exit instead of play again
+            # Client declared they are leaving after game
             self.server.player_left_after_game(self.client_id, self.player_name)
-            
+            # proactively cleanup this connection
+            self.cleanup()
+
         elif msg_type == START:
             if not self.player_name:
                 self.send_message(GAME_OVER, "Error: Please JOIN first before starting the game.")
                 return
-            
-            if not self.server.game_started: # start game
-                self.server.start_game()
-                # Send TIMER_START to all clients
-                self.send_message(TIMER_START, str(self.server.game_duration), broadcast=True)
-                # Send START_GAME to all clients with initial board
-                self.send_message(START_GAME, str(self.server.board), broadcast=True)
-                # Send initial scores
-                score_data = self.server.format_scores()
-                self.send_message(SCORE_UPDATE, score_data, broadcast=True)
-            else: # game already started, send current board state as CLICK_UPDATE
+            if not self.server.game_started:
+                self.server.mark_player_ready(self.client_id)
+            else:
                 self.send_message(CLICK_UPDATE, str(self.server.board))
         elif msg_type == CLICK:
             if not self.server.game_started:
                 self.send_message(GAME_OVER, "Error: Game not started. Send START message first.")
                 return
-            
             parts = data.split(',')
-            row = int(parts[0])
-            col = int(parts[1])
-            
-            with self.server.board_lock: # thread lock to prevent race conditions
+            try:
+                row = int(parts[0]); col = int(parts[1])
+            except:
+                return
+            with self.server.board_lock:
                 clicked_value = self.server.board[row][col]
-                
                 if clicked_value.startswith('o[') or clicked_value.startswith('x['):
-                    return # if already clicked = ignore
-                
-                # TODO: NATHAN can put this in its own function
-                ##############################
+                    return
                 num_value = int(clicked_value)
                 if is_prime(num_value):
-                    self.server.board[row][col] = f"o[{self.client_id}]" # add player marker (O means correct)
-                    self.server.scores[self.client_id] = self.server.scores.get(self.client_id, 0) + 1 # add +1 to that client's score
+                    self.server.board[row][col] = f"o[{self.client_id}]"
+                    self.server.scores[self.client_id] = self.server.scores.get(self.client_id, 0) + 1
                 else:
-                    self.server.board[row][col] = f"x[{self.client_id}]" # add player marker (X means wrong)
-                    self.server.scores[self.client_id] = self.server.scores.get(self.client_id, 0) - 1 # subtract 1 from that client's score
-                #############################
-
+                    self.server.board[row][col] = f"x[{self.client_id}]"
+                    self.server.scores[self.client_id] = self.server.scores.get(self.client_id, 0) - 1
                 # broadcast updated board + scores
-                self.send_message(CLICK_UPDATE, str(self.server.board), broadcast=True)
+                self.server.broadcast_message(CLICK_UPDATE, str(self.server.board))
                 score_data = self.server.format_scores()
-                self.send_message(SCORE_UPDATE, score_data, broadcast=True)
-                
-                # Check if board is complete
+                self.server.broadcast_message(SCORE_UPDATE, score_data)
                 if self.server.check_board_complete():
                     self.server.end_game("BOARD_COMPLETE")
-                
         else:
             self.send_message(GAME_OVER, f"Unknown message type: {msg_type}")
-    
+
     def cleanup(self):
+        # guard so cleanup is idempotent
+        if not getattr(self, 'running', False) and not self.client_socket:
+            # already cleaned up
+            return
         self.running = False
-        self.client_socket.close()
-        print(f"Connection with {self.address} closed")
+        try:
+            with self.lock:
+                try:
+                    self.client_socket.shutdown(socket.SHUT_RDWR)
+                except:
+                    pass
+                try:
+                    self.client_socket.close()
+                except:
+                    pass
+        except Exception:
+            pass
 
+        # remove player data from server
+        try:
+            with self.server.clients_lock:
+                if self in self.server.clients:
+                    self.server.clients.remove(self)
+        except Exception as e:
+            print(f"Error removing client handler from server list: {e}")
 
-class MathGameServer:    
+        if self.client_id in self.server.player_names:
+            try:
+                del self.server.player_names[self.client_id]
+            except KeyError:
+                pass
+
+        if self.client_id in self.server.scores:
+            try:
+                del self.server.scores[self.client_id]
+            except KeyError:
+                pass
+
+        if hasattr(self.server, "ready_players"):
+            try:
+                self.server.ready_players.discard(self.client_id)
+            except Exception:
+                pass
+
+        # Inform remaining clients that this player has left (so clients can update UI)
+        try:
+            if self.player_name:
+                self.server.broadcast_message(PLAYER_LEFT_UPDATE_OTHERS, f"{self.player_name} has disconnected.")
+        except Exception as e:
+            print(f"Error broadcasting player-left: {e}")
+
+        print(f"Connection with {self.address} (ID {self.client_id}) closed and cleaned up")
+        self.server.check_force_end_game()
+
+class MathGameServer:
     def __init__(self, host='localhost', port=5555):
         self.host = host
         self.port = port
         self.server_socket = None
         self.clients = []
+        self.clients_lock = threading.Lock()
         self.running = False
-        # Shared game state
         self.board = None
         self.game_started = False
-        self.board_lock = threading.Lock()  # THREAD SAFE board access
-        # Timer and scoring
+        self.board_lock = threading.Lock()
         self.game_timer = None
-        self.game_duration = 120  # 2 minutes in seconds
-        self.scores = {}  # client_id -> score
-        self.player_names = {}  # client_id -> player_name
+        self.game_duration = 120
+        self.scores = {}          # client_id -> score
+        self.player_names = {}    # client_id -> player_name
+        self.next_client_id = 1   # incremental id to avoid reuse
+
+    def mark_player_ready(self, client_id):
+        if not hasattr(self, "ready_players"):
+            self.ready_players = set()
+
+        # ensure client is active
+        active_clients = [c for c in self.clients if getattr(c, 'running', False) and c.player_name]
+        active_ids = {c.client_id for c in active_clients}
+        if client_id not in active_ids:
+            # ignore ready from non-active client
+            return
+
+        self.ready_players.add(client_id)
+        ready_count = len(self.ready_players)
+        total = len(active_clients)
+        status = f"{ready_count}/{total} players ready"
+        self.broadcast_message(WELCOME, status)
+
+        if ready_count == total and total > 0:
+            self.ready_players.clear()
+            self.start_game()
+            self.broadcast_message(TIMER_START, str(self.game_duration))
+            self.broadcast_message(START_GAME, str(self.board))
+            self.broadcast_message(SCORE_UPDATE, self.format_scores())
     
+    def redistribute_client_ids(self):
+        # Redistribute IDs on game end to accomodate new players for future games
+        active_clients = [c for c in self.clients if c.running and c.player_name]
+
+        # Assign new IDs
+        new_id_map = {}
+        new_player_names = {}
+        new_scores = {}
+
+        for new_id, client in enumerate(active_clients, start=1):
+            old_id = client.client_id
+            client.client_id = new_id
+            new_id_map[old_id] = new_id
+            new_player_names[new_id] = client.player_name
+            new_scores[new_id] = 0  # reset scores for new round
+
+        # Replace server dictionaries
+        self.player_names = new_player_names
+        self.scores = new_scores
+
+        print("ID redistribution complete:", new_id_map)
+
     def start_game(self):
+        self.redistribute_client_ids()
         self.board = generate_board()
         self.game_started = True
-        # Initialize scores for all connected clients
-        for client in self.clients:
-            if client.player_name:
-                self.scores[client.client_id] = 0
-        # Start game timer
+        with self.clients_lock:
+            for client in list(self.clients):
+                if client.player_name and client.running:
+                    self.scores[client.client_id] = 0
+        if self.game_timer and getattr(self.game_timer, 'is_alive', lambda: False)():
+            try:
+                self.game_timer.cancel()
+            except:
+                pass
         self.game_timer = threading.Timer(self.game_duration, self.end_game_timer)
         self.game_timer.daemon = True
         self.game_timer.start()
         print(f"Game started ====> Board generated. Timer: {self.game_duration}s")
-    
+        
+    def check_force_end_game(self):
+        # Kills current game in the event that someone leaves a game
+        active = [c for c in self.clients if getattr(c, 'running', False) and c.player_name]
+        if len(active) == 0 and self.game_started:
+            print("All clients disconnected. Force-ending the game.")
+            self.end_game("ALL_CLIENTS_DISCONNECTED")
+
     def broadcast_message(self, msg_type, data):
-        for client in self.clients:
-            if client.running:
+        # iterate over a shallow copy to allow pruning
+        self.check_force_end_game()
+        with self.clients_lock:
+            clients_copy = list(self.clients)
+        for client in clients_copy:
+            if not getattr(client, 'running', False):
+                # run cleanup to ensure removal
                 try:
-                    packet = client.encode_message(msg_type, data)
+                    client.cleanup()
+                except:
+                    pass
+                continue
+            try:
+                packet = client.encode_message(msg_type, data)
+                with client.lock:
                     client.client_socket.send(packet)
-                    print(f"Broadcast to {client.address}: Type={msg_type}, Data={data[:100] if len(str(data)) > 100 else data}") # TODO: NATHAN remove this
-                except Exception as e:
-                    print(f"Error broadcasting to {client.address}: {e}")
-    
+                print(f"Broadcast to {client.address}: Type={msg_type}, Data={str(data)[:100]}")
+            except Exception as e:
+                print(f"Error broadcasting to {client.address}: {e}. Removing client.")
+                # on failure remove that client
+                try:
+                    client.running = False
+                    client.cleanup()
+                except Exception as e2:
+                    print(f"Error during client cleanup after failed broadcast: {e2}")
+
     def check_board_complete(self):
         if not self.board:
             return False
-        
         for i in range(5):
             for j in range(5):
                 value = self.board[i][j]
-                # If it's not marked (doesn't start with 'o[' or 'x['), check if it's a prime
                 if not value.startswith('o[') and not value.startswith('x['):
                     try:
                         num_value = int(value)
                         if is_prime(num_value):
-                            # Found an unmarked prime, game not complete
                             return False
                     except ValueError:
                         pass
         return True
-    
-    # Called when the game timer expires
+
     def end_game_timer(self):
         print("Game timer expired!")
         self.end_game("TIME_UP")
-    
-    # Used to format scores with player names instead of their IDs
+
     def format_scores(self):
         formatted = {}
         for client_id, score in self.scores.items():
             name = self.player_names.get(client_id, f"Player {client_id}")
             formatted[name] = score
         return str(formatted)
-    
-    # Function after ending a game to check which players want to play again
-    # Only if ALL those connected players want to play again, the game restarts
+
     def player_ready_for_new_game(self, client_id):
         if not hasattr(self, 'ready_players'):
             self.ready_players = set()
-        
+        # only count active players
+        active = [c for c in self.clients if getattr(c, 'running', False) and c.player_name]
+        active_ids = {c.client_id for c in active}
+        if client_id not in active_ids:
+            return
         self.ready_players.add(client_id)
         ready_count = len(self.ready_players)
-        total_players = len([c for c in self.clients if c.player_name])
-        
+        total_players = len(active)
         print(f"Player {client_id} ready for new game. {ready_count}/{total_players} ready.")
-        
-        # notify all clients about ready status
         ready_names = [self.player_names.get(pid, f"Player {pid}") for pid in self.ready_players]
         status_msg = f"{ready_count}/{total_players} players ready: {', '.join(ready_names)}"
         self.broadcast_message(WELCOME, status_msg)
-        
-        # start when all players are ready
         if ready_count == total_players and total_players > 0:
             self.ready_players.clear()
             self.start_game()
-            # Start new game => send TIMER_START, START_GAME, SCORE_UPDATE
-            for client in self.clients:
-                if client.player_name:
-                    client.send_message(TIMER_START, str(self.game_duration), broadcast=True)
-                    client.send_message(START_GAME, str(self.board), broadcast=True)
-                    score_data = self.format_scores()
-                    client.send_message(SCORE_UPDATE, score_data, broadcast=True)
-                    break
-    
-    # Notify other players when someone leaves instead of playing again
+            # send to all active clients
+            self.broadcast_message(TIMER_START, str(self.game_duration))
+            self.broadcast_message(START_GAME, str(self.board))
+            self.broadcast_message(SCORE_UPDATE, self.format_scores())
+
     def player_left_after_game(self, client_id, player_name):
-        # remove from ready players if they were in there
         if hasattr(self, 'ready_players') and client_id in self.ready_players:
             self.ready_players.discard(client_id)
-        
-        # clear all ready players since we can't continue without all original players
         if hasattr(self, 'ready_players'):
             self.ready_players.clear()
-        
-        # notify all other clients
         message = f"{player_name} has left the game and will not play again."
         self.broadcast_message(PLAYER_LEFT_UPDATE_OTHERS, message)
         print(f"Player {player_name} (ID: {client_id}) left after game ended.")
-    
-    # Called to end the game and notify all clients
-    # Happens when timer expires or board is complete or player found all primes
-    # (could also end if server gets message which is not supported)
+
     def end_game(self, reason):
         if not self.game_started:
             return
-        
         self.game_started = False
-        
-        if self.game_timer and self.game_timer.is_alive(): # stop timer (if still running)
-            self.game_timer.cancel()
-        
-        # determine winner
+        if self.game_timer and getattr(self.game_timer, 'is_alive', lambda: False)():
+            try:
+                self.game_timer.cancel()
+            except:
+                pass
         if self.scores:
             winner_id = max(self.scores.items(), key=lambda x: x[1])[0]
             winner_name = self.player_names.get(winner_id, f"Player {winner_id}")
             winner_score = self.scores[winner_id]
-            
             formatted_scores = self.format_scores()
             if reason == "TIME_UP":
                 message = f"Time's up! Winner: {winner_name} with {winner_score} points. Final scores: {formatted_scores}"
-            else:  # BOARD_COMPLETE
+            else:
                 message = f"All primes found! Winner: {winner_name} with {winner_score} points. Final scores: {formatted_scores}"
         else:
             message = f"Game ended: {reason}"
-        
-        # broadcast GAME_OVER
         self.broadcast_message(GAME_OVER, message)
         print(f"Game ended: {message}")
-    
-    # START SERVER FUNCTION
+
     def start(self):
-        self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM) # TCP socket
-        self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) # allow to bind the port again after program exit
-        self.server_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1) # dont wait for packets to fill buffer, send right away
-        
+        self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.server_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         try:
             self.server_socket.bind((self.host, self.port))
-            self.server_socket.listen(4)
+            self.server_socket.listen(8)
             self.running = True
             print(f"Server started on {self.host}:{self.port}")
             self.accept_connections()
@@ -413,18 +464,15 @@ class MathGameServer:
             print(f"Error starting server: {e}")
         finally:
             self.stop()
-    
+
     def accept_connections(self):
         while self.running:
             try:
                 client_socket, address = self.server_socket.accept()
                 print(f"New connection from {address}")
-
-                # check if game is already in progress
                 if self.game_started:
                     reject_msg = "Connection rejected: Game is currently in progress. Please wait for the next game."
                     try:
-                        # send rejection message (SERVER_BUSY)
                         data_bytes = reject_msg.encode('utf-8')
                         type_byte = struct.pack('B', SERVER_BUSY)
                         length_bytes = struct.pack('!I', len(data_bytes))
@@ -436,29 +484,33 @@ class MathGameServer:
                     print(f"Rejected connection from {address}: Game in progress")
                     continue
 
-                # create a client handler + associated unique ID
-                client_id = len(self.clients) + 1
+                with self.clients_lock:
+                    client_id = self.next_client_id
+                    self.next_client_id += 1
                 client_handler = ClientHandler(client_socket, address, self, client_id)
-                self.clients.append(client_handler)
-                
-                # start listening to the client in a separate thread
-                client_thread = threading.Thread(target=client_handler.listen)
-                client_thread.daemon = True
-                client_thread.start()
-                
-                print(f"Client {address} connected. Waiting for JOIN message...")
-                
+                with self.clients_lock:
+                    self.clients.append(client_handler)
+                t = threading.Thread(target=client_handler.listen, daemon=True)
+                t.start()
+                print(f"Client {address} connected. Waiting for JOIN message... (ID {client_id})")
             except Exception as e:
                 if self.running:
                     print(f"Error accepting connection: {e}")
-    
+
     def stop(self):
         self.running = False
-        # close all client connections
-        for client in self.clients:
-            client.cleanup()
+        with self.clients_lock:
+            clients_copy = list(self.clients)
+        for client in clients_copy:
+            try:
+                client.cleanup()
+            except:
+                pass
         if self.server_socket:
-            self.server_socket.close()
+            try:
+                self.server_socket.close()
+            except:
+                pass
         print("Server stopped")
 
 if __name__ == "__main__":
