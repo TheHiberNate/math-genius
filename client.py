@@ -50,10 +50,10 @@ class MathGameClient:
         
         # timer and Score
         self.info_frame = tk.Frame(self.root)
-        self.info_frame.pack(pady=5)
-        self.timer_label = tk.Label(self.info_frame, text="Time: --:--", font=("Arial", 14, "bold"), fg="blue")
+        self.info_frame.pack(pady=10)
+        self.timer_label = tk.Label(self.info_frame, text="Time: --:--", font=("Arial", 16, "bold"), fg="blue")
         self.timer_label.pack(side=tk.LEFT, padx=20)
-        self.score_label = tk.Label(self.info_frame, text="Scores: ", font=("Arial", 12))
+        self.score_label = tk.Label(self.info_frame, text="Scores: ", font=("Arial", 16, "bold"), fg="darkgreen")
         self.score_label.pack(side=tk.LEFT, padx=20)
         
         # Legend for colors
