@@ -24,6 +24,7 @@ TIMER_START = 14
 SCORE_UPDATE = 15
 SERVER_BUSY = 16
 PLAYER_LEFT_UPDATE_OTHERS = 17
+PLAYER_ID_MAP = 18
 
 def is_prime(n):
     if n < 2:
@@ -185,10 +186,10 @@ class ClientHandler:
                     return
                 num_value = int(clicked_value)
                 if is_prime(num_value):
-                    self.server.board[row][col] = f"o[{self.client_id}]"
+                    self.server.board[row][col] = f"o[{self.client_id}]:{num_value}" # keep number value for client display
                     self.server.scores[self.client_id] = self.server.scores.get(self.client_id, 0) + 1
                 else:
-                    self.server.board[row][col] = f"x[{self.client_id}]"
+                    self.server.board[row][col] = f"x[{self.client_id}]:{num_value}" # keep number value for client display
                     self.server.scores[self.client_id] = self.server.scores.get(self.client_id, 0) - 1
                 # broadcast updated board + scores
                 self.server.broadcast_message(CLICK_UPDATE, str(self.server.board))
@@ -294,6 +295,7 @@ class MathGameServer:
             self.broadcast_message(TIMER_START, str(self.game_duration))
             self.broadcast_message(START_GAME, str(self.board))
             self.broadcast_message(SCORE_UPDATE, self.format_scores())
+            self.broadcast_message(PLAYER_ID_MAP, self.format_player_id_map())
     
     def redistribute_client_ids(self):
         # Redistribute IDs on game end to accomodate new players for future games
@@ -394,6 +396,10 @@ class MathGameServer:
             name = self.player_names.get(client_id, f"Player {client_id}")
             formatted[name] = score
         return str(formatted)
+    
+    def format_player_id_map(self):
+        # returns mapping of client_id to player name
+        return str(self.player_names)
 
     def player_ready_for_new_game(self, client_id):
         if not hasattr(self, 'ready_players'):
@@ -417,6 +423,7 @@ class MathGameServer:
             self.broadcast_message(TIMER_START, str(self.game_duration))
             self.broadcast_message(START_GAME, str(self.board))
             self.broadcast_message(SCORE_UPDATE, self.format_scores())
+            self.broadcast_message(PLAYER_ID_MAP, self.format_player_id_map())
 
     def player_left_after_game(self, client_id, player_name):
         if hasattr(self, 'ready_players') and client_id in self.ready_players:

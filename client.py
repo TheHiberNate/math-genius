@@ -24,6 +24,7 @@ TIMER_START = 14
 SCORE_UPDATE = 15
 SERVER_BUSY = 16
 PLAYER_LEFT_UPDATE_OTHERS = 17
+PLAYER_ID_MAP = 18
 
 
 class MathGameClient:
@@ -34,6 +35,8 @@ class MathGameClient:
         self.board = None
         self.connected = False
         self.current_overlay = None  # track current overlay to destroy when needed
+        self.id_to_name_map = {}  # map client IDs to player names
+        self.my_client_id = None  # track our own client ID
         
         # GUI with Tkinter
         self.root = tk.Tk()
@@ -52,6 +55,31 @@ class MathGameClient:
         self.timer_label.pack(side=tk.LEFT, padx=20)
         self.score_label = tk.Label(self.info_frame, text="Scores: ", font=("Arial", 12))
         self.score_label.pack(side=tk.LEFT, padx=20)
+        
+        # Legend for colors
+        self.legend_frame = tk.Frame(self.root, bg="white", relief=tk.RIDGE, borderwidth=2)
+        self.legend_frame.pack(pady=5)
+        tk.Label(self.legend_frame, text="Color Legend:", font=("Arial", 10, "bold"), bg="white").pack(side=tk.LEFT, padx=5)
+        
+        # Green legend
+        green_box = tk.Label(self.legend_frame, text="  ", bg="lightgreen", relief=tk.RAISED, borderwidth=1)
+        green_box.pack(side=tk.LEFT, padx=2)
+        tk.Label(self.legend_frame, text="Your correct", font=("Arial", 9), bg="white").pack(side=tk.LEFT, padx=(0, 10))
+        
+        # Blue legend
+        blue_box = tk.Label(self.legend_frame, text="  ", bg="lightblue", relief=tk.RAISED, borderwidth=1)
+        blue_box.pack(side=tk.LEFT, padx=2)
+        tk.Label(self.legend_frame, text="Opponent correct", font=("Arial", 9), bg="white").pack(side=tk.LEFT, padx=(0, 10))
+        
+        # Red legend
+        red_box = tk.Label(self.legend_frame, text="  ", bg="lightcoral", relief=tk.RAISED, borderwidth=1)
+        red_box.pack(side=tk.LEFT, padx=2)
+        tk.Label(self.legend_frame, text="Your wrong", font=("Arial", 9), bg="white").pack(side=tk.LEFT, padx=(0, 10))
+        
+        # Orange legend
+        orange_box = tk.Label(self.legend_frame, text="  ", bg="orange", relief=tk.RAISED, borderwidth=1)
+        orange_box.pack(side=tk.LEFT, padx=2)
+        tk.Label(self.legend_frame, text="Opponent wrong", font=("Arial", 9), bg="white").pack(side=tk.LEFT, padx=(0, 10))
         
         # timer state
         self.timer_running = False
@@ -130,6 +158,27 @@ class MathGameClient:
             self.score_label.config(text=f"Scores: {score_text}")
         except Exception as e:
             self.log_message(f"Error updating scores: {e}")
+    
+    # Function to update player ID mapping from score updates
+    def update_player_id_map(self, map_str):
+        try:
+            import ast
+            # map is sent as => {client_id: "Player Name", ...}
+            id_map = ast.literal_eval(map_str)
+            self.id_to_name_map = id_map
+            
+            # find the player's actual client ID by matching the player name
+            for client_id, name in id_map.items():
+                if name == self.player_name:
+                    self.my_client_id = client_id
+                    #self.log_message(f"client ID is: {client_id}")
+                    break
+        except Exception as e:
+            self.log_message(f"Error updating player ID map: {e}")
+    
+    # Function to check if a client ID belongs to this player (used for displaying right colours on the board)
+    def is_my_client_id(self, client_id):
+        return self.my_client_id is not None and client_id == self.my_client_id
     
     # Function to encode messages into bytes to send to server
     def encode_message(self, msg_type, data):
@@ -285,6 +334,8 @@ class MathGameClient:
             self.update_board(data)
         elif msg_type == SCORE_UPDATE:
             self.update_scores(data)
+        elif msg_type == PLAYER_ID_MAP:
+            self.update_player_id_map(data)
         elif msg_type == SERVER_BUSY:
             self.log_message(f"Server Busy: {data}")
             messagebox.showerror("Connection Rejected", data)
@@ -319,6 +370,7 @@ class MathGameClient:
     def update_board(self, board_str):
         try:
             import ast
+            import re
             board = ast.literal_eval(board_str) # convert string board to python list
             self.board = board
             
@@ -331,10 +383,30 @@ class MathGameClient:
                     if btn['state'] == tk.DISABLED:
                         btn.config(state=tk.NORMAL)
                     
-                    if value.startswith('o['): # prime found
-                        btn.config(text=value, bg="lightgreen", fg="black")
-                    elif value.startswith('x['): # not prime clicked
-                        btn.config(text=value, bg="lightcoral", fg="black")
+                    if value.startswith('o['): # prime found (correct answer)
+                        match = re.search(r'o\[(\d+)\]:(\d+)', value) # extract client id from value like o[1]:___
+                        if match:
+                            client_id = int(match.group(1))
+                            number = match.group(2)
+                            # GREEN if this client got it, BLUE if opponent got it
+                            if self.is_my_client_id(client_id):
+                                btn.config(text=number, bg="lightgreen", fg="black")
+                            else:
+                                btn.config(text=number, bg="lightblue", fg="black")
+                        else:
+                            btn.config(text=value, bg="lightgreen", fg="black")
+                    elif value.startswith('x['): # not prime clicked (wrong answer)
+                        match = re.search(r'x\[(\d+)\]:(\d+)', value) # extract client id from value like x[1]:___
+                        if match:
+                            client_id = int(match.group(1))
+                            number = match.group(2)
+                            # RED if this client got it wrong, ORANGE if opponent got it wrong
+                            if self.is_my_client_id(client_id):
+                                btn.config(text=number, bg="lightcoral", fg="black")
+                            else:
+                                btn.config(text=number, bg="orange", fg="black")
+                        else:
+                            btn.config(text=value, bg="lightcoral", fg="black")
                     else: # box not clicked yet
                         btn.config(text=value, bg="lightgray", fg="black")    
         except Exception as e:
