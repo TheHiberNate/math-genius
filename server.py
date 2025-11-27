@@ -530,17 +530,29 @@ class MathGameServer:
             except:
                 pass
         
-        # determine winner
+        # determine winner or tie
         if self.scores:
-            winner_id = max(self.scores.items(), key=lambda x: x[1])[0]
-            winner_name = self.player_names.get(winner_id, f"Player {winner_id}")
-            winner_score = self.scores[winner_id]
+            max_score = max(self.scores.values())
+            winners = [client_id for client_id, score in self.scores.items() if score == max_score]
             
             formatted_scores = self.format_scores()
-            if reason == "TIME_UP": # TIMER finished
-                message = f"Time's up! Winner: {winner_name} with {winner_score} points. Final scores: {formatted_scores}"
-            else:  # BOARD_COMPLETE
-                message = f"All primes found! Winner: {winner_name} with {winner_score} points. Final scores: {formatted_scores}"
+            
+            if len(winners) > 1: # TIE when more than 1 winner
+                winner_names = [self.player_names.get(wid, f"Player {wid}") for wid in winners]
+                winners_str = ", ".join(winner_names)
+                if reason == "TIME_UP": # TIMER finished
+                    message = f"Time's up! It's a tie between {winners_str} with {max_score} points each! Final scores: {formatted_scores}"
+                else:  # BOARD_COMPLETE
+                    message = f"All primes found! It's a tie between {winners_str} with {max_score} points each! Final scores: {formatted_scores}"
+            else:
+                # single winner
+                winner_id = winners[0]
+                winner_name = self.player_names.get(winner_id, f"Player {winner_id}")
+                winner_score = max_score
+                if reason == "TIME_UP": # TIMER finished
+                    message = f"Time's up! Winner: {winner_name} with {winner_score} points. Final scores: {formatted_scores}"
+                else:  # BOARD_COMPLETE
+                    message = f"All primes found! Winner: {winner_name} with {winner_score} points. Final scores: {formatted_scores}"
         else:
             message = f"Game ended: {reason}"
         
