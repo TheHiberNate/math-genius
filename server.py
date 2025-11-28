@@ -1,4 +1,4 @@
-# Author: Nathan Gawargy
+# Author: Nathan Gawargy & Louis Marleau
 # Math Genius Game Server
 
 import socket
