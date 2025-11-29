@@ -6,6 +6,7 @@ import threading
 import random
 import struct
 import time
+import argparse
 
 # TOKENS (message TYPES)
 # Client -> Server
@@ -635,7 +636,14 @@ class MathGameServer:
         print("Server stopped")
 
 if __name__ == "__main__":
-    server = MathGameServer(host='localhost', port=5555)
+    parser = argparse.ArgumentParser(description='Math Genius Game Server')
+    parser.add_argument('--server_ip', type=str, default='localhost', 
+                        help='IP address to bind the server to (default: localhost)')
+    parser.add_argument('--server_port', type=int, default=5555, 
+                        help='Port number to bind the server to (default: 5555)')
+    args = parser.parse_args()
+    
+    server = MathGameServer(host=args.server_ip, port=args.server_port)
     try:
         server.start()
     except KeyboardInterrupt:

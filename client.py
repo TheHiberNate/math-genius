@@ -6,6 +6,7 @@ import threading
 import struct
 import tkinter as tk
 from tkinter import messagebox, simpledialog
+import argparse
 
 # TOKENS (message TYPES)
 # Client -> Server
@@ -28,7 +29,7 @@ PLAYER_ID_MAP = 18
 
 
 class MathGameClient:
-    def __init__(self):
+    def __init__(self, server_ip='localhost', server_port=5555):
         self.socket = None
         self.running = False
         self.player_name = None
@@ -37,11 +38,13 @@ class MathGameClient:
         self.current_overlay = None  # track current overlay to destroy when needed
         self.id_to_name_map = {}  # map client IDs to player names
         self.my_client_id = None  # track our own client ID
+        self.server_ip = server_ip
+        self.server_port = server_port
         
         # GUI with Tkinter
         self.root = tk.Tk()
         self.root.title("Math Genius")
-        self.root.geometry("600x700")
+        self.root.geometry("600x750")
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
         # status label for connection status
@@ -220,7 +223,7 @@ class MathGameClient:
         try:
             # connect to server
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.socket.connect(('localhost', 5555)) # TODO: NATHAN change this to actual ip/port later
+            self.socket.connect((self.server_ip, self.server_port))
             self.running = True
             
             # send JOIN message with the player name
@@ -228,7 +231,7 @@ class MathGameClient:
             self.socket.send(packet)
             
             self.log_message(f"Connecting as {self.player_name}...")
-            self.status_label.config(text=f"Waiting for server response...", fg="orange")
+            self.status_label.config(text=f"Waiting for server response.", fg="orange")
             
             # start listener thread (will set connected=True when WELCOME received)
             listener_thread = threading.Thread(target=self.listen_to_server, daemon=True)
@@ -546,5 +549,12 @@ class MathGameClient:
 
 
 if __name__ == "__main__":
-    client = MathGameClient()
+    parser = argparse.ArgumentParser(description='Math Genius Game Client')
+    parser.add_argument('--server_ip', type=str, default='localhost', 
+                        help='IP address of the game server (default: localhost)')
+    parser.add_argument('--server_port', type=int, default=5555, 
+                        help='Port number of the game server (default: 5555)')
+    args = parser.parse_args()
+    
+    client = MathGameClient(server_ip=args.server_ip, server_port=args.server_port)
     client.run()
