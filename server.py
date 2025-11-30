@@ -566,6 +566,8 @@ class MathGameServer:
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM) # TCP socket
         self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) # allow to bind the port again after program exit
         self.server_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1) # dont wait for packets to fill buffer, send right away
+        # Set timeout so accept() doesn't block forever
+        self.server_socket.settimeout(1.0)
         
         try:
             self.server_socket.bind((self.host, self.port))
@@ -614,12 +616,22 @@ class MathGameServer:
                 
                 print(f"Client {address} connected. Waiting for JOIN message... (ID {client_id})")
                 
+            except socket.timeout:
+                # Timeout is expected, just continue the loop to check self.running
+                continue
             except Exception as e:
                 if self.running:
                     print(f"Error accepting connection: {e}")
     
     def stop(self):
+        print("Stopping server.")
         self.running = False
+        # Cancel game timer if running
+        if self.game_timer and getattr(self.game_timer, 'is_alive', lambda: False)():
+            try:
+                self.game_timer.cancel()
+            except:
+                pass
         # close all client connections
         with self.clients_lock:
             clients_copy = list(self.clients)
