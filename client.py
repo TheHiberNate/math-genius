@@ -95,13 +95,13 @@ class MathGameClient:
                                      font=("Arial", 12), bg="green", fg="white", width=12)
         self.connect_btn.pack(side=tk.LEFT, padx=5)
         self.start_btn = tk.Button(self.control_frame, text="Ready Up", command=self.send_start, 
-                                   font=("Arial", 12), bg="blue", fg="white", width=12, state=tk.DISABLED)
-        self.start_btn.pack(side=tk.LEFT, padx=5)
+                                   font=("Arial", 12), bg="blue", fg="white", width=12)
+        # dont pack start_btn initially => appear after connecting
         self.disconnect_btn = tk.Button(
             self.control_frame, text="Disconnect",
             command=self.exit_to_home,
-            font=("Arial", 12), bg="red", fg="white", width=12, state=tk.DISABLED)
-        self.disconnect_btn.pack(side=tk.LEFT, padx=5)
+            font=("Arial", 12), bg="red", fg="white", width=12)
+        # dont pack disconnect_btn initially => appear after connecting
 
         self.board_frame = tk.Frame(self.root, bg="white", relief=tk.RAISED, borderwidth=2) # game board frame
         self.board_frame.pack(pady=20)
@@ -320,9 +320,9 @@ class MathGameClient:
                 self.connected = True
                 self.log_message(f"Successfully connected as {self.player_name}")
                 self.status_label.config(text=f"Connected as {self.player_name}", fg="green")
-                self.connect_btn.config(state=tk.DISABLED)
-                self.start_btn.config(state=tk.NORMAL)
-                self.disconnect_btn.config(state=tk.NORMAL)
+                self.connect_btn.pack_forget()
+                self.start_btn.pack(side=tk.LEFT, padx=5)
+                self.disconnect_btn.pack(side=tk.LEFT, padx=5)
         elif msg_type == TIMER_START: # start timer for specified duration
             duration = int(data)
             self.log_message(f"Game timer started: {duration} seconds")
@@ -331,7 +331,7 @@ class MathGameClient:
             self.log_message(f"Game started + Board received")
             self.status_label.config(text=f"Connected as {self.player_name}", fg="green")
             self.update_board(data)
-            self.start_btn.config(state=tk.DISABLED) # hide start btn cuz game started already
+            self.start_btn.pack_forget() # hide start btn cuz game started already
         elif msg_type == CLICK_UPDATE:
             self.log_message(f"Board updated")
             self.update_board(data)
@@ -343,7 +343,7 @@ class MathGameClient:
             self.log_message(f"Server Busy: {data}")
             messagebox.showerror("Connection Rejected", data)
             self.on_disconnect()
-            self.disconnect_btn.config(state=tk.DISABLED)
+            self.disconnect_btn.pack_forget()
         elif msg_type == PLAYER_LEFT_UPDATE_OTHERS:
             self.log_message(f"Player Left: {data}")
             self.show_player_left_overlay(data)
@@ -505,7 +505,6 @@ class MathGameClient:
             except:
                 pass
         self.on_disconnect()
-        self.disconnect_btn.config(state=tk.DISABLED)
     
     # Function to request play again
     def request_play_again(self):
@@ -529,8 +528,9 @@ class MathGameClient:
         self.timer_label.config(text="Time: --:--", fg="blue")
         self.score_label.config(text="Scores:")
         self.status_label.config(text="Disconnected", fg="red")
-        self.connect_btn.config(state=tk.NORMAL)
-        self.start_btn.config(state=tk.DISABLED)
+        self.start_btn.pack_forget()
+        self.disconnect_btn.pack_forget()
+        self.connect_btn.pack(side=tk.LEFT, padx=5)
         for i in range(5):
             for j in range(5):
                 self.board_buttons[i][j].config(state=tk.DISABLED) # Disable all board buttons
