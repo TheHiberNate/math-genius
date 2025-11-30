@@ -364,9 +364,11 @@ class MathGameClient:
                     # Display game over overlay on board
                     self.show_game_over_overlay(winner_info, scores)
                 else:
+                    # No scores in message, just show message in popup
                     messagebox.showinfo("Game Over", data)
-            except:
+            except Exception as e:
                 # Fallback to simple display if parsing fails
+                self.log_message(f"Error parsing game over message: {e}")
                 messagebox.showinfo("Game Over", data)
     
     # Function to update the GUI board based on updates from server
@@ -421,6 +423,7 @@ class MathGameClient:
         if self.current_overlay:
             self.current_overlay.destroy()
         
+        self.log_message("Displaying game over overlay with Play Again option")
         overlay = tk.Frame(self.board_frame, bg="white", relief=tk.RAISED, borderwidth=5)
         overlay.place(relx=0.5, rely=0.5, anchor=tk.CENTER, width=450, height=350)
         self.current_overlay = overlay  # Store reference
@@ -508,6 +511,7 @@ class MathGameClient:
     
     # Function to request play again
     def request_play_again(self):
+        self.log_message("Play Again button clicked!")
         if not self.connected:
             messagebox.showwarning("Warning", "Not connected to server")
             return

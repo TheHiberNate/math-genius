@@ -247,10 +247,10 @@ class ClientHandler:
                 num_value = int(clicked_value)
                 if is_prime(num_value):
                     self.server.board[row][col] = f"o[{self.client_id}]:{num_value}" # add player marker (O means correct), keep number value for client display
-                    self.server.scores[self.client_id] = self.server.scores.get(self.client_id, 0) + 1 # add +1 to that client's score
+                    self.server.scores[self.client_id] = self.server.scores.get(self.client_id, 0) + 2 # add +2 to that client's score
                 else:
                     self.server.board[row][col] = f"x[{self.client_id}]:{num_value}" # add player marker (X means wrong), keep number value for client display
-                    self.server.scores[self.client_id] = self.server.scores.get(self.client_id, 0) - 1 # subtract 1 from that client's score
+                    self.server.scores[self.client_id] = self.server.scores.get(self.client_id, 0) - 3 # subtract 3 from that client's score
 
                 # broadcast updated board + scores
                 self.server.broadcast_message(CLICK_UPDATE, str(self.server.board))
