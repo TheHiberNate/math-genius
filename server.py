@@ -242,10 +242,12 @@ class ClientHandler:
                 
                 num_value = int(clicked_value)
                 if is_prime(num_value):
-                    self.server.board[row][col] = f"o[{self.client_id}]:{num_value}" # add player marker (O means correct), keep number value for client display
+                    self.server.board[row][col] = f"o[{self.client_id}]:{num_value}" # add player marker (O means correct),
+                                                                                     # keep number value for client display
                     self.server.scores[self.client_id] = self.server.scores.get(self.client_id, 0) + 2 # add +2 to that client's score
                 else:
-                    self.server.board[row][col] = f"x[{self.client_id}]:{num_value}" # add player marker (X means wrong), keep number value for client display
+                    self.server.board[row][col] = f"x[{self.client_id}]:{num_value}" # add player marker (X means wrong),
+                                                                                     # keep number value for client display
                     self.server.scores[self.client_id] = self.server.scores.get(self.client_id, 0) - 3 # subtract 3 from that client's score
 
                 # broadcast updated board + scores
@@ -567,10 +569,10 @@ class MathGameServer:
         
         try:
             self.server_socket.bind((self.host, self.port))
-            self.server_socket.listen(8)
+            self.server_socket.listen(8) # allow up to 8 queued connections
             self.running = True
             print(f"Server started on {self.host}:{self.port}")
-            self.accept_connections()
+            self.accept_connections() # GOAL to accept connections
         except Exception as e:
             print(f"Error starting server: {e}")
         finally:
