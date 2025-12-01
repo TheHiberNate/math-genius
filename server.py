@@ -13,7 +13,7 @@ import argparse
 JOIN = 1
 START = 2
 CLICK = 3
-NAME_UPDATE = 4
+# NAME_UPDATE = 4
 PLAY_AGAIN = 5
 CLIENT_LEFT = 6
 # Server -> Client
@@ -70,7 +70,7 @@ def generate_board():
 # TYPE-LENGTH-DATA Message format:
 #   Type (1 byte): integer indicating message type
 #   Length (4 bytes): integer indicating length of data
-#   Data (max 2^32 bytes): actual data 
+#   Data (max 2^16 bytes): actual data 
 class ClientHandler:    
     def __init__(self, client_socket, address, server, client_id):
         self.client_socket = client_socket
@@ -107,13 +107,9 @@ class ClientHandler:
         data = data_bytes.decode('utf-8')
         return msg_type, data
     
-    # Function to send message to client (broadcast = True => send to all clients)
-    def send_message(self, msg_type, data, broadcast=False):
+    # Function to send message to client
+    def send_message(self, msg_type, data):
         try:
-            if broadcast:
-                # broadcast flag is set => send to all clients via server
-                self.server.broadcast_message(msg_type, data)
-                return
             # send only to this client
             packet = self.encode_message(msg_type, data)
             with self.lock:
@@ -203,10 +199,10 @@ class ClientHandler:
             player_count = len([c for c in self.server.clients if getattr(c, 'running', False) and c.player_name])
             self.server.broadcast_message(WELCOME, f"{player_count} player(s) connected. Waiting for game to start...")
             
-        elif msg_type == NAME_UPDATE:
-            # update player name mapped to a given id
-            self.player_name = data
-            self.server.player_names[self.client_id] = data
+        # elif msg_type == NAME_UPDATE:
+        #     # update player name mapped to a given id
+        #     self.player_name = data
+        #     self.server.player_names[self.client_id] = data
         
         elif msg_type == PLAY_AGAIN:
             # client wants to play again => use same clients
@@ -234,7 +230,7 @@ class ClientHandler:
             
             parts = data.split(',')
             try:
-                row = int(parts[0]); col = int(parts[1])
+                row = int(parts[0]); col = int(parts[1]) # get msg data
             except:
                 return
             

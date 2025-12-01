@@ -13,7 +13,7 @@ import argparse
 JOIN = 1
 START = 2
 CLICK = 3
-NAME_UPDATE = 4
+# NAME_UPDATE = 4
 PLAY_AGAIN = 5
 CLIENT_LEFT = 6
 # Server -> Client
@@ -205,6 +205,15 @@ class MathGameClient:
         data = data_bytes.decode('utf-8')
         return msg_type, data
     
+    # Function to send message to server
+    def send_message(self, msg_type, data):
+        try:
+            packet = self.encode_message(msg_type, data)
+            self.socket.send(packet)
+        except Exception as e:
+            self.log_message(f"Error sending message: {e}")
+            raise
+    
     # Function to connect to server
     # It connects with TCP to server and sends JOIN message (Type 1) with player name.
     # Considered only CONNECTED once the WELCOME message is received from server.
@@ -227,8 +236,7 @@ class MathGameClient:
             self.running = True
             
             # send JOIN message with the player name
-            packet = self.encode_message(JOIN, self.player_name)
-            self.socket.send(packet)
+            self.send_message(JOIN, self.player_name)
             
             self.log_message(f"Connecting as {self.player_name}...")
             self.status_label.config(text=f"Waiting for server response.", fg="orange")
@@ -242,15 +250,14 @@ class MathGameClient:
             self.connected = False
             
     # Function to send START game message
-    # Can be started by any of the clients connected
+    # Client ready-up sends START message to server. Need all players to send this before game starts.
     # Game only starts when server sends back START_GAME (Type 11) message
     def send_start(self):
         if not self.connected:
             messagebox.showwarning("Warning", "Not connected to server")
             return
         try:
-            packet = self.encode_message(START, "")
-            self.socket.send(packet)
+            self.send_message(START, "")
             self.log_message("Sent START game request. Waiting for server...")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to send START: {e}")
@@ -263,8 +270,7 @@ class MathGameClient:
         try:
             # Send CLICK message with row,col
             click_data = f"{row},{col}"
-            packet = self.encode_message(CLICK, click_data)
-            self.socket.send(packet)
+            self.send_message(CLICK, click_data)
             self.log_message(f"Clicked cell ({row},{col})")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to send click: {e}")
@@ -498,8 +504,7 @@ class MathGameClient:
         # notify server that this client is leaving
         if self.socket and self.connected:
             try:
-                packet = self.encode_message(CLIENT_LEFT, "")
-                self.socket.send(packet)
+                self.send_message(CLIENT_LEFT, "")
             except:
                 pass
         if self.socket:
@@ -517,8 +522,7 @@ class MathGameClient:
             return
         
         try:
-            packet = self.encode_message(PLAY_AGAIN, "")
-            self.socket.send(packet)
+            self.send_message(PLAY_AGAIN, "")
             self.log_message("Ready for new game. Waiting for other players...")
             self.status_label.config(text="Waiting for other players...", fg="orange")
         except Exception as e:
